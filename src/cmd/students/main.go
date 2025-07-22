@@ -9,12 +9,14 @@ import (
 	"image"
 	"image/jpeg"
 	"image/png"
-	"io/ioutil"
+	"io"
 	"log"
 	"net/http"
 	"os"
 	"strings"
 	"time"
+
+	"isams_to_sheets/src/common"
 
 	"github.com/joho/godotenv"
 	"golang.org/x/image/draw"
@@ -24,12 +26,7 @@ import (
 )
 
 const (
-	SPREADSHEET_ID        = "10hEhyN2-xeDT0b193h236u5lTbjHg5F7CuxjQN7IagA"
-	SHEET_NAME            = "Temp"
-	STUDENTS_API          = "https://alice-smith.isamshosting.cloud/Main/api/students"
-	PAGE_SIZE             = 1000
-	USER_MASTER_BATCH_API = "https://alice-smith.kissflow.com/dataset/2/AcflcLIlo4aq/User_Master/batch"
-	BATCH_SIZE            = 500
+	STUDENTS_API = "https://alice-smith.isamshosting.cloud/Main/api/students"
 )
 
 type BearerTokenResponse struct {
@@ -53,6 +50,17 @@ type StudentsResponse struct {
 	Students []Student `json:"students"`
 }
 
+type Photo struct {
+	Base64Data     string
+	OriginalSize   int
+	CompressedSize int
+	Status         string
+}
+
+func (p *Photo) IsValid() bool {
+	return p.Status == "ok" && p.Base64Data != ""
+}
+
 func getBearerToken(apiKeyUrl string) (string, error) {
 	resp, err := http.Get(apiKeyUrl)
 	if err != nil {
@@ -70,7 +78,7 @@ func fetchAllStudents(bearer string) ([]Student, error) {
 	students := []Student{}
 	page := 1
 	for {
-		url := fmt.Sprintf("%s?page=%d&pageSize=%d", STUDENTS_API, page, PAGE_SIZE)
+		url := fmt.Sprintf("%s?page=%d&pageSize=%d", STUDENTS_API, page, common.PAGE_SIZE)
 		req, _ := http.NewRequest("GET", url, nil)
 		req.Header.Set("Authorization", bearer)
 		client := &http.Client{}
@@ -84,7 +92,7 @@ func fetchAllStudents(bearer string) ([]Student, error) {
 			return nil, err
 		}
 		students = append(students, sr.Students...)
-		if len(sr.Students) < PAGE_SIZE {
+		if len(sr.Students) < common.PAGE_SIZE {
 			break
 		}
 		page++
@@ -92,26 +100,33 @@ func fetchAllStudents(bearer string) ([]Student, error) {
 	return students, nil
 }
 
-func fetchStudentPhoto(schoolId, bearer string) (string, int, int, string, error) {
+func fetchPhoto(schoolId, bearer string) (*Photo, error) {
 	url := fmt.Sprintf("https://alice-smith.isamshosting.cloud/Main/api/students/%s/photos/current", schoolId)
 	req, _ := http.NewRequest("GET", url, nil)
 	req.Header.Set("Authorization", bearer)
 	client := &http.Client{}
 	resp, err := client.Do(req)
 	if err != nil {
-		return "", 0, 0, "download error", err
+		return &Photo{Status: "download error"}, err
 	}
 	defer resp.Body.Close()
+
 	contentType := resp.Header.Get("Content-Type")
 	if !strings.HasPrefix(contentType, "image/") {
 		log.Printf("schoolId %s: Unexpected Content-Type: %s", schoolId, contentType)
-		return "", 0, 0, "not image", nil
+		return &Photo{Status: "not image"}, nil
 	}
-	imgBytes, err := ioutil.ReadAll(resp.Body)
+
+	imgBytes, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return "", 0, 0, "read error", err
+		return &Photo{Status: "read error"}, err
 	}
-	origSize := len(imgBytes)
+
+	photo := &Photo{
+		OriginalSize: len(imgBytes),
+		Status:       "processing",
+	}
+
 	var img image.Image
 	img, decodeErr := jpeg.Decode(bytes.NewReader(imgBytes))
 	if decodeErr != nil {
@@ -121,19 +136,22 @@ func fetchStudentPhoto(schoolId, bearer string) (string, int, int, string, error
 		log.Printf("schoolId %s: decode error: %v, Content-Type: %s, first bytes: % x", schoolId, decodeErr, contentType, imgBytes[:min(16, len(imgBytes))])
 		filename := fmt.Sprintf("failed_photo_%s.bin", schoolId)
 		_ = os.WriteFile(filename, imgBytes, 0644)
-		return "", origSize, 0, "decode error", nil
+		return &Photo{Status: "decode error"}, nil
 	}
+
 	var buf bytes.Buffer
 	quality := 40
-	if origSize > 102400 {
+	if photo.OriginalSize > 102400 {
 		quality = 40
 	}
 	if err := jpeg.Encode(&buf, img, &jpeg.Options{Quality: quality}); err != nil {
-		return "", origSize, 0, "compression error", nil
+		return &Photo{Status: "compression error"}, nil
 	}
+
 	compressed := buf.Bytes()
-	compSize := len(compressed)
-	if compSize > 37500 {
+	photo.CompressedSize = len(compressed)
+
+	if photo.CompressedSize > 37500 {
 		// Resize to max 400x600 and try again
 		maxW, maxH := 400, 600
 		bounds := img.Bounds()
@@ -159,15 +177,18 @@ func fetchStudentPhoto(schoolId, bearer string) (string, int, int, string, error
 		draw.CatmullRom.Scale(resized, resized.Bounds(), img, bounds, draw.Over, nil)
 		buf.Reset()
 		if err := jpeg.Encode(&buf, resized, &jpeg.Options{Quality: quality}); err != nil {
-			return "", origSize, 0, "resize/compression error", nil
+			return &Photo{Status: "resize/compression error"}, nil
 		}
 		compressed = buf.Bytes()
-		compSize = len(compressed)
-		if compSize > 37500 {
-			return "", origSize, compSize, "too large after resize", nil
+		photo.CompressedSize = len(compressed)
+		if photo.CompressedSize > 37500 {
+			return &Photo{Status: "too large after resize"}, nil
 		}
 	}
-	return base64.StdEncoding.EncodeToString(compressed), origSize, compSize, "ok", nil
+
+	photo.Base64Data = base64.StdEncoding.EncodeToString(compressed)
+	photo.Status = "ok"
+	return photo, nil
 }
 
 func min(a, b int) int {
@@ -177,12 +198,24 @@ func min(a, b int) int {
 	return b
 }
 
-func mapStudentToRow(s Student, photo string, origSize int, compSize int, status string) []interface{} {
+func mapStudentToRow(s Student, photo *common.Photo) []interface{} {
 	gender := "2"
 	if s.Gender == "M" {
 		gender = "1"
 	}
 	yearGroupStr := fmt.Sprintf("%v", s.YearGroup)
+	photoData := ""
+	origSize := 0
+	compSize := 0
+	status := "error"
+
+	if photo != nil {
+		photoData = photo.Base64Data
+		origSize = photo.OriginalSize
+		compSize = photo.CompressedSize
+		status = photo.Status
+	}
+
 	return []interface{}{
 		s.SchoolId,    // schoolId
 		s.FullName,    // Name
@@ -196,7 +229,7 @@ func mapStudentToRow(s Student, photo string, origSize int, compSize int, status
 		gender,        // Gender
 		s.FormGroup,   // FormGroup
 		yearGroupStr,  // YearGroup
-		photo,         // photo
+		photoData,     // photo
 		origSize,      // photo_original_size
 		compSize,      // photo_compressed_size
 		status,        // photo_status
@@ -213,9 +246,9 @@ func writeBatchesToSheet(srv *sheets.Service, values [][]interface{}, batchSize 
 		batch := values[i:end]
 		rowEnd := rowStart + len(batch) - 1
 		colEnd := string(rune('A' + len(batch[0]) - 1))
-		rangeStr := fmt.Sprintf("%s!A%d:%s%d", SHEET_NAME, rowStart, colEnd, rowEnd)
+		rangeStr := fmt.Sprintf("%s!A%d:%s%d", common.SHEET_NAME_STUDENTS, rowStart, colEnd, rowEnd)
 		vr := &sheets.ValueRange{Values: batch}
-		_, err := srv.Spreadsheets.Values.Update(SPREADSHEET_ID, rangeStr, vr).ValueInputOption("RAW").Do()
+		_, err := srv.Spreadsheets.Values.Update(common.SPREADSHEET_ID, rangeStr, vr).ValueInputOption("RAW").Do()
 		if err != nil {
 			return err
 		}
@@ -224,14 +257,14 @@ func writeBatchesToSheet(srv *sheets.Service, values [][]interface{}, batchSize 
 	return nil
 }
 
-func mapStudentToUserMasterPayload(s Student) map[string]interface{} {
+func mapStudentToUserMasterPayload(s Student, photo *common.Photo) map[string]interface{} {
 	schoolId := s.SchoolId
 	gender := "2"
 	if s.Gender == "M" {
 		gender = "1"
 	}
 	yearGroupStr := fmt.Sprintf("%v", s.YearGroup)
-	return map[string]interface{}{
+	payload := map[string]interface{}{
 		"_id":          schoolId,
 		"Name":         schoolId,
 		"Name_1":       s.FullName,
@@ -246,92 +279,12 @@ func mapStudentToUserMasterPayload(s Student) map[string]interface{} {
 		"DateOfBirth":  s.DateOfBirth,
 		"Status":       "1",
 	}
-}
 
-func deleteAllUserMaster(accessKeyId, accessKeySecret string) error {
-	// Fetch all User_Master records
-	url := "https://alice-smith.kissflow.com/dataset/2/AcflcLIlo4aq/User_Master/view/Students/list"
-	req, _ := http.NewRequest("GET", url, nil)
-	req.Header.Set("X-Access-Key-Id", accessKeyId)
-	req.Header.Set("X-Access-Key-Secret", accessKeySecret)
-	client := &http.Client{}
-	resp, err := client.Do(req)
-	if err != nil {
-		return fmt.Errorf("failed to fetch User_Master records: %w", err)
-	}
-	defer resp.Body.Close()
-	var result struct {
-		Data []struct {
-			Name string `json:"Name"`
-			ID   string `json:"_id"`
-		} `json:"Data"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return fmt.Errorf("failed to decode User_Master response: %w", err)
+	if photo != nil && photo.IsValid() {
+		payload["image_1"] = photo.Base64Data
 	}
 
-	// Delete each record
-	deleteURL := "https://alice-smith.kissflow.com/dataset/2/AcflcLIlo4aq/User_Master"
-	for _, rec := range result.Data {
-		payload := map[string]string{
-			"Name": rec.Name,
-			"_id":  rec.ID,
-		}
-		jsonPayload, _ := json.Marshal(payload)
-		req, _ := http.NewRequest("DELETE", deleteURL, bytes.NewReader(jsonPayload))
-		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set("X-Access-Key-Id", accessKeyId)
-		req.Header.Set("X-Access-Key-Secret", accessKeySecret)
-		client := &http.Client{}
-		resp, err := client.Do(req)
-		if err != nil {
-			log.Printf("Failed to delete User_Master record %s: %v", rec.ID, err)
-			continue
-		}
-		defer resp.Body.Close()
-		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-			body, _ := ioutil.ReadAll(resp.Body)
-			log.Printf("Failed to delete User_Master record %s: %s", rec.ID, string(body))
-			continue
-		}
-		log.Printf("Deleted User_Master record: %s", rec.ID)
-	}
-	return nil
-}
-
-func sendToUserMasterBatch(students []Student, accessKeyId, accessKeySecret string) error {
-	for i := 0; i < len(students); i += BATCH_SIZE {
-		end := i + BATCH_SIZE
-		if end > len(students) {
-			end = len(students)
-		}
-		batch := students[i:end]
-		var payload []map[string]interface{}
-		for _, s := range batch {
-			payload = append(payload, mapStudentToUserMasterPayload(s))
-		}
-		jsonPayload, err := json.Marshal(payload)
-		if err != nil {
-			return fmt.Errorf("failed to marshal batch payload: %w", err)
-		}
-		req, _ := http.NewRequest("POST", USER_MASTER_BATCH_API, bytes.NewReader(jsonPayload))
-		req.Header.Set("X-Access-Key-Id", accessKeyId)
-		req.Header.Set("X-Access-Key-Secret", accessKeySecret)
-		req.Header.Set("Accept", "application/json")
-		req.Header.Set("Content-Type", "application/json")
-		client := &http.Client{}
-		resp, err := client.Do(req)
-		if err != nil {
-			return fmt.Errorf("failed to send batch: %w", err)
-		}
-		defer resp.Body.Close()
-		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-			body, _ := ioutil.ReadAll(resp.Body)
-			return fmt.Errorf("batch API error: %s", string(body))
-		}
-		log.Printf("Batch %d-%d sent successfully", i+1, end)
-	}
-	return nil
+	return payload
 }
 
 func main() {
@@ -341,7 +294,6 @@ func main() {
 		fmt.Println(".env file loaded successfully")
 	}
 
-	// Load environment variables after godotenv.Load()
 	apiKeyUrl := os.Getenv("API_KEY_URL")
 	if apiKeyUrl == "" {
 		log.Fatal("API_KEY_URL environment variable is not set")
@@ -360,8 +312,9 @@ func main() {
 	fmt.Println("DEBUG API_KEY_URL:", apiKeyUrl)
 	start := time.Now()
 	ctx := context.Background()
+
 	// Load service account
-	b, err := ioutil.ReadFile("api.json")
+	b, err := os.ReadFile("api.json")
 	if err != nil {
 		log.Fatalf("Unable to read service account file: %v", err)
 	}
@@ -385,30 +338,39 @@ func main() {
 	}
 
 	// Delete all User_Master records before sending new ones
-	err = deleteAllUserMaster(accessKeyId, accessKeySecret)
+	err = common.DeleteAllUserMaster(accessKeyId, accessKeySecret, "Students")
 	if err != nil {
 		log.Fatalf("Failed to delete all User_Master records: %v", err)
 	}
 
-	// Send to User_Master/batch endpoint in batches
-	err = sendToUserMasterBatch(students, accessKeyId, accessKeySecret)
+	// Prepare payloads for User_Master batch
+	var payloads []map[string]interface{}
+	for _, s := range students {
+		photo, err := common.FetchStudentPhoto(s.SchoolId, bearer)
+		if err != nil {
+			log.Printf("Warning: could not fetch photo for schoolId %s: %v", s.SchoolId, err)
+			photo = nil
+		}
+		payloads = append(payloads, mapStudentToUserMasterPayload(s, photo))
+	}
+
+	// Send to User_Master/batch endpoint
+	err = common.SendToUserMasterBatch(payloads, accessKeyId, accessKeySecret)
 	if err != nil {
 		log.Fatalf("Failed to send to User_Master batch endpoint: %v", err)
 	}
 
-	// Prepare data
+	// Prepare data for sheets
 	headers := []interface{}{"schoolId", "Name", "type", "jobTitle", "department", "IdentityNo", "DateOfBirth", "IdentityType", "Status", "Gender", "FormGroup", "YearGroup", "photo", "photo_original_size", "photo_compressed_size", "photo_status"}
 	values := [][]interface{}{headers}
+
 	for _, s := range students {
-		photo, origSize, compSize, status, err := fetchStudentPhoto(s.SchoolId, bearer)
+		photo, err := common.FetchStudentPhoto(s.SchoolId, bearer)
 		if err != nil {
 			log.Printf("Warning: could not fetch photo for schoolId %s: %v", s.SchoolId, err)
-			photo = ""
-			origSize = 0
-			compSize = 0
-			status = "error"
+			photo = nil
 		}
-		values = append(values, mapStudentToRow(s, photo, origSize, compSize, status))
+		values = append(values, mapStudentToRow(s, photo))
 	}
 
 	// Write to Google Sheets
@@ -419,7 +381,7 @@ func main() {
 
 	// Clear the sheet first
 	clearReq := &sheets.ClearValuesRequest{}
-	_, err = srv.Spreadsheets.Values.Clear(SPREADSHEET_ID, SHEET_NAME, clearReq).Do()
+	_, err = srv.Spreadsheets.Values.Clear(common.SPREADSHEET_ID, common.SHEET_NAME_STUDENTS, clearReq).Do()
 	if err != nil {
 		log.Fatalf("Unable to clear sheet: %v", err)
 	}

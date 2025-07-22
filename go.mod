@@ -6,7 +6,7 @@ toolchain go1.24.4
 
 require (
 	github.com/joho/godotenv v1.5.1
-	golang.org/x/image v0.28.0
+	golang.org/x/image v0.29.0
 	golang.org/x/oauth2 v0.30.0
 	google.golang.org/api v0.238.0
 )
@@ -30,7 +30,7 @@ require (
 	golang.org/x/crypto v0.39.0 // indirect
 	golang.org/x/net v0.41.0 // indirect
 	golang.org/x/sys v0.33.0 // indirect
-	golang.org/x/text v0.26.0 // indirect
+	golang.org/x/text v0.27.0 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20250603155806-513f23925822 // indirect
 	google.golang.org/grpc v1.73.0 // indirect
 	google.golang.org/protobuf v1.36.6 // indirect
