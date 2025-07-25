@@ -271,7 +271,7 @@ func mapStudentToUserMasterPayload(s Student, photo *common.Photo) map[string]in
 		"Type":         "1",
 		"Job_Title":    "",
 		"Department":   s.SchoolId,
-		"IdentityNo":   s.Email,
+		"IdentityNo":   "",
 		"IdentityType": "1",
 		"FormGroup":    s.FormGroup,
 		"YearGroup":    yearGroupStr,
@@ -299,14 +299,14 @@ func main() {
 		log.Fatal("API_KEY_URL environment variable is not set")
 	}
 
-	accessKeyId := os.Getenv("X_ACCESS_KEY_ID_VALUE")
+	accessKeyId := os.Getenv("X_ACCESS_KEY_ID")
 	if accessKeyId == "" {
-		log.Fatal("X_ACCESS_KEY_ID_VALUE environment variable is not set")
+		log.Fatal("X_ACCESS_KEY_ID environment variable is not set")
 	}
 
-	accessKeySecret := os.Getenv("X_ACCESS_KEY_SECRET_VALUE")
+	accessKeySecret := os.Getenv("X_ACCESS_KEY_SECRET")
 	if accessKeySecret == "" {
-		log.Fatal("X_ACCESS_KEY_SECRET_VALUE environment variable is not set")
+		log.Fatal("X_ACCESS_KEY_SECRET environment variable is not set")
 	}
 
 	fmt.Println("DEBUG API_KEY_URL:", apiKeyUrl)

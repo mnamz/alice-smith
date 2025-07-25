@@ -4,22 +4,20 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
 	"log"
 	"net/http"
 	"os"
 
 	"isams_to_sheets/src/common"
 
+	"github.com/joho/godotenv"
 	"golang.org/x/oauth2/google"
 	"google.golang.org/api/option"
 	"google.golang.org/api/sheets/v4"
 )
 
 const (
-	STAFF_API           = "https://alice-smith.kissflow.com/dataset/2/AcflcLIlo4aq/Employee_Master_01/view/Active_Employees_Basic_Details/list"
-	X_ACCESS_KEY_ID     = "X-Access-Key-Id"
-	X_ACCESS_KEY_SECRET = "X-Access-Key-Secret"
+	STAFF_API = "https://alice-smith.kissflow.com/dataset/2/AcflcLIlo4aq/Employee_Master_01/view/Active_Employees_Basic_Details/list"
 )
 
 type StaffRecord struct {
@@ -41,8 +39,8 @@ func fetchAllStaff(accessKeyId, accessKeySecret string) ([]StaffRecord, error) {
 	for {
 		url := fmt.Sprintf("%s?page_number=%d&page_size=%d", STAFF_API, page, common.PAGE_SIZE)
 		req, _ := http.NewRequest("GET", url, nil)
-		req.Header.Set(X_ACCESS_KEY_ID, accessKeyId)
-		req.Header.Set(X_ACCESS_KEY_SECRET, accessKeySecret)
+		req.Header.Set("X-Access-Key-Id", accessKeyId)
+		req.Header.Set("X-Access-Key-Secret", accessKeySecret)
 		client := &http.Client{}
 		resp, err := client.Do(req)
 		if err != nil {
@@ -100,18 +98,24 @@ func mapStaffToUserMasterPayload(s StaffRecord) map[string]interface{} {
 }
 
 func main() {
+	if err := godotenv.Load(); err != nil {
+		fmt.Println("WARNING: .env file not loaded:", err)
+	} else {
+		fmt.Println(".env file loaded successfully")
+	}
+
 	accessKeyId := os.Getenv("X_ACCESS_KEY_ID_VALUE")
 	if accessKeyId == "" {
-		log.Fatal("X_ACCESS_KEY_ID_VALUE environment variable is not set")
+		log.Fatal("X_ACCESS_KEY_ID environment variable is not set")
 	}
 
 	accessKeySecret := os.Getenv("X_ACCESS_KEY_SECRET_VALUE")
 	if accessKeySecret == "" {
-		log.Fatal("X_ACCESS_KEY_SECRET_VALUE environment variable is not set")
+		log.Fatal("X_ACCESS_KEY_SECRET environment variable is not set")
 	}
 
 	ctx := context.Background()
-	b, err := ioutil.ReadFile("api.json")
+	b, err := os.ReadFile("api.json")
 	if err != nil {
 		log.Fatalf("Unable to read service account file: %v", err)
 	}

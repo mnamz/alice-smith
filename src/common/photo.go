@@ -7,7 +7,7 @@ import (
 	"image"
 	"image/jpeg"
 	"image/png"
-	"io/ioutil"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -44,7 +44,7 @@ func FetchStudentPhoto(schoolId, bearer string) (*Photo, error) {
 		return &Photo{Status: "not image"}, nil
 	}
 
-	imgBytes, err := ioutil.ReadAll(resp.Body)
+	imgBytes, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return &Photo{Status: "read error"}, err
 	}
