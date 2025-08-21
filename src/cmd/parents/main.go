@@ -25,7 +25,7 @@ type ParentRecord struct {
 	Name     string `json:"Name"`
 	Forename string `json:"Contact_Forename"`
 	Surname  string `json:"Contact_Surname"`
-	Email    string `json:"Email_Address"`
+	Email    string `json:"Contact_EmailAddress"`
 }
 
 type ParentResponse struct {
@@ -59,28 +59,98 @@ func fetchAllParents(accessKeyId, accessKeySecret string) ([]ParentRecord, error
 	return allParents, nil
 }
 
+// Create a function that gets all the records from the User_Master dataset and compare against fetchAllParents. Return a list of records that are not in fetchAllParents but are in User_Master.
+func getInactiveUsers(accessKeyId, accessKeySecret string) ([]map[string]string, error) {
+	// First get all parents to build comparison set
+	parents, err := fetchAllParents(accessKeyId, accessKeySecret)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch parents: %w", err)
+	}
+
+	// Create a map of parent emails (without @asis.edu.my) for quick lookup
+	parentEmails := make(map[string]bool)
+	for _, p := range parents {
+		email := strings.TrimSuffix(p.Email, "@asis.edu.my")
+		parentEmails[email] = true
+	}
+
+	// Fetch all User_Master records with pagination
+	var recordsToDelete []map[string]string
+	page := 1
+	for {
+		url := fmt.Sprintf("https://alice-smith.kissflow.com/dataset/2/AcflcLIlo4aq/User_Master/view/Parents/list?page_number=%d&page_size=999&search_field=Name", page)
+		req, _ := http.NewRequest("GET", url, nil)
+		req.Header.Set("X-Access-Key-Id", accessKeyId)
+		req.Header.Set("X-Access-Key-Secret", accessKeySecret)
+		client := &http.Client{}
+		resp, err := client.Do(req)
+		if err != nil {
+			return nil, fmt.Errorf("failed to fetch User_Master records: %w", err)
+		}
+		defer resp.Body.Close()
+
+		var result struct {
+			Data []struct {
+				Name string `json:"Name"`
+				ID   string `json:"_id"`
+			} `json:"Data"`
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+			return nil, fmt.Errorf("failed to decode User_Master response: %w", err)
+		}
+
+		// If no more records, break the loop
+		if len(result.Data) == 0 {
+			break
+		}
+
+		// Add records that don't exist in parents list
+		for _, rec := range result.Data {
+			if !parentEmails[rec.Name] {
+				recordsToDelete = append(recordsToDelete, map[string]string{
+					"_id":  rec.ID,
+					"Name": rec.Name,
+				})
+			}
+		}
+
+		// If we got less than page size, we're done
+		if len(result.Data) < 999 {
+			break
+		}
+		page++
+	}
+
+	return recordsToDelete, nil
+}
+
+func stripSSOSuffix(name string) string {
+	return strings.TrimSuffix(name, "- SSO")
+}
+
 func mapParentToRow(s ParentRecord) []interface{} {
 	return []interface{}{
-		strings.TrimSuffix(s.Email, "@asis.edu.my"), // parentId (stripped E)
-		s.Forename + " " + s.Surname,                // Name
-		"",                                          // jobTitle
-		"Parents",                                   // department
-		"",                                          // IdentityNo
-		"3",                                         // IdentityType
-		"2",                                         // Gender
+		strings.TrimSuffix(s.Email, "@asis.edu.my"),                  // parentId
+		stripSSOSuffix(s.Forename) + " " + stripSSOSuffix(s.Surname), // Name
+		"",        // jobTitle
+		"Parents", // department
+		"",        // IdentityNo
+		"3",       // IdentityType
+		"2",       // Gender
 	}
 }
 
 func mapParentToUserMasterPayload(s ParentRecord) map[string]interface{} {
 	return map[string]interface{}{
-		"_id":          s.Email,
-		"Name":         s.Email,
-		"Name_1":       s.Forename + " " + s.Surname,
-		"Type":         "3",
+		"_id":          strings.TrimSuffix(s.Email, "@asis.edu.my"),
+		"Name":         strings.TrimSuffix(s.Email, "@asis.edu.my"),
+		"Name_1":       stripSSOSuffix(s.Forename) + " " + stripSSOSuffix(s.Surname),
+		"Type":         "2", // 2 = Parent, 3 = Student, 1 = Staff
 		"Job_Title":    "",
 		"Department":   "Parents",
-		"IdentityNo":   s.Email,
-		"IdentityType": "3",
+		"IdentityNo":   "",
+		"IdentityType": "",
+		"Gender":       "2",
 		"Status":       "1",
 	}
 }
@@ -118,10 +188,29 @@ func main() {
 		log.Fatalf("Unable to fetch parents: %v", err)
 	}
 
-	// Delete all User_Master records before sending new ones
-	err = common.DeleteAllUserMaster(accessKeyId, accessKeySecret, "Parents")
+	// Get records to delete (records in User_Master but not in parents)
+	recordsToDelete, err := getInactiveUsers(accessKeyId, accessKeySecret)
 	if err != nil {
-		log.Fatalf("Failed to delete all User_Master records: %v", err)
+		log.Fatalf("Failed to get records to delete: %v", err)
+	}
+
+	// Log all recordsToDelete
+	jsonPayloads, _ := json.MarshalIndent(recordsToDelete, "", "  ")
+	fmt.Printf("Records to delete:\n%s\n", string(jsonPayloads))
+
+	// send to txt
+	os.WriteFile("recordsToDelete.txt", []byte(string(jsonPayloads)), 0644)
+
+	//terminate
+	// os.Exit(0)
+
+	// Delete records that are not in parents list
+	if len(recordsToDelete) > 0 {
+		log.Printf("Found %d records to delete", len(recordsToDelete))
+		err = common.DeleteAllUserMaster(accessKeyId, accessKeySecret, recordsToDelete)
+		if err != nil {
+			log.Fatalf("Failed to delete User_Master records: %v", err)
+		}
 	}
 
 	// Prepare payloads for User_Master batch
@@ -131,8 +220,8 @@ func main() {
 	}
 
 	// Debug print the payloads
-	jsonPayloads, _ := json.MarshalIndent(payloads, "", "  ")
-	fmt.Printf("Sending payloads to User_Master batch:\n%s\n", string(jsonPayloads))
+	// jsonPayloads, _ := json.MarshalIndent(payloads, "", "  ")
+	// fmt.Printf("Sending payloads to User_Master batch:\n%s\n", string(jsonPayloads))
 
 	// Send to User_Master/batch endpoint
 	err = common.SendToUserMasterBatch(payloads, accessKeyId, accessKeySecret)

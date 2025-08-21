@@ -1,0 +1,50 @@
+SchoolId,FullName,OriginalSizeKB,CompressedSizeKB,Status
+072004257539,Rui-An  Ma,190.1,10.8,ok
+080808505039,Freddie James Nolan,475.3,13.4,ok
+080833027465,Henry Benjamin Nolan,587.2,13.2,ok
+081908158836,Jingyu Liu,181.2,10.9,ok
+081909187296,Chenzhen Hu,198.1,11.3,ok
+0828125905533,Orla Mary Emma Ferguson,163.9,14.8,ok
+083204306385,Luqa Frolov,268.7,9.6,ok
+083708940879,Jinyu Liu,180.5,10.8,ok
+090930851600,Zayn Faliq Qamar Khan,210.1,13.0,ok
+091207195789,Qi Rae Tong,696.3,11.8,ok
+091407241397,Raffaella Toranzo Delgado,204.6,12.7,ok
+091808139687,Isaac Guan Yue Wei,179.8,9.9,ok
+091808196558,Anaisha Gupta,277.8,20.6,ok
+093107422888,Noah Haider Hazrin,158.1,8.9,ok
+093610883322,Jing Gao,408.5,15.5,ok
+094510028658,Zerui Zhao,612.4,12.1,ok
+0955359052123,Mikael Atmos Engler,226.9,14.5,ok
+100208931869,Gabriel Rue Zac Fong,861.3,12.3,ok
+100718374026,Hugo Ray Kemp,214.2,14.5,ok
+104308387873,Henry James Albert Wilson,190.3,10.1,ok
+105307502366,Haolin Chen,180.7,28.6,ok
+105309609793,Rithika Gayathri Nair,310.1,16.2,ok
+113110248936,Louis Zheng Yang Lee,290.5,15.0,ok
+1156506268736,Brex Jin Yang Lim,190.2,11.0,ok
+115904754666,Sze Xuan Chee,240.3,12.9,ok
+121807490692,Talia Rose Gale,249.2,14.7,ok
+1232224568198,Chung Yau Chan,171.8,17.8,ok
+131808135614,Juin Le Go,210.5,12.7,ok
+135130338637,Qingyao Ge,285.2,14.2,ok
+135307200902,Puteri Nadra Raniya Ahmad Najmi,264.3,14.3,ok
+135908248931,Ava Nicole Doyle,804.5,13.4,ok
+1401107310542,Danha Kim,159.1,16.0,ok
+1407024985724,Mystica Priscilla Don Mystic,205.5,12.5,ok
+143102733902,Jing Lin Yap,166.4,10.5,ok
+1444276920229,Zeest Zahra,187.1,18.2,ok
+154508184465,Leo Arthur Agnew,250.5,12.0,ok
+155004759943,Luis Tang,168.7,10.2,ok
+161805123323,Weize Sun,222.0,10.4,ok
+170108082527,Jiana Xie,278.3,13.7,ok
+170138604952,Bolin Xie,259.1,13.3,ok
+187793768659,Zhixin Chen,162.4,16.5,ok
+195707886210,Lincoln Zhe Bo Yoon,240.5,12.6,ok
+201010065443,Elliot Anthony Thomas Butler,275.5,12.9,ok
+260127276444,Ananya Mitul Lakhani,207.4,9.0,ok
+358999168353,Ms Maryam Abd Halim,433.6,7.6,ok
+581443342447,Evita Ee Lin Tan,165.3,16.0,ok
+741727593140,Cui Ying Seow,173.8,16.2,ok
+773574577197,Destiny Tin Wing Szeto,162.9,17.3,ok
+874871276213,Khairah Amira Khan,167.8,15.9,ok

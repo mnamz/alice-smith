@@ -9,36 +9,10 @@ import (
 	"net/http"
 )
 
-func DeleteAllUserMaster(accessKeyId, accessKeySecret, viewName string) error {
-	// Fetch all User_Master records
-	url := fmt.Sprintf("https://alice-smith.kissflow.com/dataset/2/AcflcLIlo4aq/User_Master/view/%s/list", viewName)
-	req, _ := http.NewRequest("GET", url, nil)
-	req.Header.Set("X-Access-Key-Id", accessKeyId)
-	req.Header.Set("X-Access-Key-Secret", accessKeySecret)
-	client := &http.Client{}
-	resp, err := client.Do(req)
-	if err != nil {
-		return fmt.Errorf("failed to fetch User_Master records: %w", err)
-	}
-	defer resp.Body.Close()
-	var result struct {
-		Data []struct {
-			Name string `json:"Name"`
-			ID   string `json:"_id"`
-		} `json:"Data"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return fmt.Errorf("failed to decode User_Master response: %w", err)
-	}
-
-	// Delete each record
+func DeleteAllUserMaster(accessKeyId, accessKeySecret string, records []map[string]string) error {
 	deleteURL := "https://alice-smith.kissflow.com/dataset/2/AcflcLIlo4aq/User_Master"
-	for _, rec := range result.Data {
-		payload := map[string]string{
-			"Name": rec.Name,
-			"_id":  rec.ID,
-		}
-		jsonPayload, _ := json.Marshal(payload)
+	for _, rec := range records {
+		jsonPayload, _ := json.Marshal(rec)
 		req, _ := http.NewRequest("DELETE", deleteURL, bytes.NewReader(jsonPayload))
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("X-Access-Key-Id", accessKeyId)
@@ -46,16 +20,16 @@ func DeleteAllUserMaster(accessKeyId, accessKeySecret, viewName string) error {
 		client := &http.Client{}
 		resp, err := client.Do(req)
 		if err != nil {
-			log.Printf("Failed to delete User_Master record %s: %v", rec.ID, err)
+			log.Printf("Failed to delete User_Master record %s: %v", rec["_id"], err)
 			continue
 		}
 		defer resp.Body.Close()
 		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 			body, _ := ioutil.ReadAll(resp.Body)
-			log.Printf("Failed to delete User_Master record %s: %s", rec.ID, string(body))
+			log.Printf("Failed to delete User_Master record %s: %s", rec["_id"], string(body))
 			continue
 		}
-		log.Printf("Deleted User_Master record: %s", rec.ID)
+		log.Printf("Deleted User_Master record: %s", rec["_id"])
 	}
 	return nil
 }

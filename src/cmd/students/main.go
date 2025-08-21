@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"encoding/csv"
 	"encoding/json"
 	"fmt"
 	"image"
@@ -90,6 +91,10 @@ func fetchAllStudents(bearer string) ([]Student, error) {
 		var sr StudentsResponse
 		if err := json.NewDecoder(resp.Body).Decode(&sr); err != nil {
 			return nil, err
+		}
+		// Log each fetched student's SchoolId for debugging purposes
+		for _, student := range sr.Students {
+			log.Printf("Fetched student SchoolId: %s", student.SchoolId)
 		}
 		students = append(students, sr.Students...)
 		if len(sr.Students) < common.PAGE_SIZE {
@@ -198,6 +203,46 @@ func min(a, b int) int {
 	return b
 }
 
+// cardNoMap maps student SchoolId to proximity card number from the CSV export.
+var cardNoMap map[string]string
+
+// loadCardNoMap builds a lookup of schoolId -> cardNo from the CSV. It
+// considers column 0 as the ID and column 9 as the card number. Card numbers
+// beginning with "000000" are ignored as they represent duplicates/invalids.
+func loadCardNoMap(csvPath string) (map[string]string, error) {
+	f, err := os.Open(csvPath)
+	if err != nil {
+		return nil, fmt.Errorf("open CSV: %w", err)
+	}
+	defer f.Close()
+
+	r := csv.NewReader(f)
+	r.FieldsPerRecord = -1
+
+	result := make(map[string]string)
+	for {
+		rec, err := r.Read()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return nil, fmt.Errorf("read CSV: %w", err)
+		}
+		if len(rec) <= 9 {
+			continue
+		}
+		id := strings.TrimSpace(rec[0])
+		card := strings.TrimSpace(rec[9])
+		if id == "" || card == "" || strings.HasPrefix(card, "0000") {
+			continue
+		}
+		if _, ok := result[id]; !ok {
+			result[id] = card
+		}
+	}
+	return result, nil
+}
+
 func mapStudentToRow(s Student, photo *common.Photo) []interface{} {
 	gender := "2"
 	if s.Gender == "M" {
@@ -216,6 +261,11 @@ func mapStudentToRow(s Student, photo *common.Photo) []interface{} {
 		status = photo.Status
 	}
 
+	cardNo := ""
+	if cardNoMap != nil {
+		cardNo = cardNoMap[s.SchoolId]
+	}
+
 	return []interface{}{
 		s.SchoolId,    // schoolId
 		s.FullName,    // Name
@@ -229,6 +279,7 @@ func mapStudentToRow(s Student, photo *common.Photo) []interface{} {
 		gender,        // Gender
 		s.FormGroup,   // FormGroup
 		yearGroupStr,  // YearGroup
+		cardNo,        // CardNo
 		photoData,     // photo
 		origSize,      // photo_original_size
 		compSize,      // photo_compressed_size
@@ -264,27 +315,114 @@ func mapStudentToUserMasterPayload(s Student, photo *common.Photo) map[string]in
 		gender = "1"
 	}
 	yearGroupStr := fmt.Sprintf("%v", s.YearGroup)
+	jobTitle := "JB"
+	if yearGroupStr == "7" || yearGroupStr == "8" || yearGroupStr == "9" || yearGroupStr == "10" || yearGroupStr == "11" || yearGroupStr == "12" || yearGroupStr == "13" {
+		jobTitle = "EP"
+	}
 	payload := map[string]interface{}{
 		"_id":          schoolId,
 		"Name":         schoolId,
-		"Name_1":       s.FullName,
+		"Name_1":       strings.ToUpper(s.FullName),
 		"Type":         "1",
-		"Job_Title":    "",
-		"Department":   s.SchoolId,
+		"Job_Title":    jobTitle,
+		"Department":   s.FormGroup,
 		"IdentityNo":   "",
 		"IdentityType": "1",
 		"FormGroup":    s.FormGroup,
 		"YearGroup":    yearGroupStr,
 		"Gender":       gender,
-		"DateOfBirth":  s.DateOfBirth,
+		"DateOfBirth":  "",
 		"Status":       "1",
+		"AccessGroup":  "STUDENTS",
 	}
 
 	if photo != nil && photo.IsValid() {
 		payload["image_1"] = photo.Base64Data
 	}
 
+	cardNo := ""
+	if cardNoMap != nil {
+		cardNo = cardNoMap[schoolId]
+	}
+	payload["CardNo"] = cardNo
+
 	return payload
+}
+
+// Add a helper that identifies inactive students currently present in User_Master but not returned by the Students API.
+func getInactiveStudents(accessKeyId, accessKeySecret string) ([]map[string]string, error) {
+	// Obtain bearer token so we can fetch the full list of students.
+	apiKeyUrl := os.Getenv("API_KEY_URL")
+	if apiKeyUrl == "" {
+		return nil, fmt.Errorf("API_KEY_URL environment variable is not set")
+	}
+
+	bearerToken, err := getBearerToken(apiKeyUrl)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get bearer token: %w", err)
+	}
+	bearer := "Bearer " + bearerToken
+
+	// Fetch all students from the Students API
+	students, err := fetchAllStudents(bearer)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch students: %w", err)
+	}
+
+	// Build a set of active student SchoolIds for quick lookup
+	activeIds := make(map[string]bool)
+	for _, s := range students {
+		activeIds[s.SchoolId] = true
+	}
+
+	// Iterate through the User_Master dataset and collect records that are not active
+	var recordsToDelete []map[string]string
+	page := 1
+	for {
+		url := fmt.Sprintf("https://alice-smith.kissflow.com/dataset/2/AcflcLIlo4aq/User_Master/view/Students/list?page_number=%d&page_size=999&search_field=Name", page)
+		req, _ := http.NewRequest("GET", url, nil)
+		req.Header.Set("X-Access-Key-Id", accessKeyId)
+		req.Header.Set("X-Access-Key-Secret", accessKeySecret)
+		client := &http.Client{}
+		resp, err := client.Do(req)
+		if err != nil {
+			return nil, fmt.Errorf("failed to fetch User_Master records: %w", err)
+		}
+		defer resp.Body.Close()
+
+		var result struct {
+			Data []struct {
+				Name string `json:"Name"`
+				ID   string `json:"_id"`
+			} `json:"Data"`
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+			return nil, fmt.Errorf("failed to decode User_Master response: %w", err)
+		}
+
+		// Break if no more records are returned
+		if len(result.Data) == 0 {
+			break
+		}
+
+		// Collect records that are not in the active student set
+		for _, rec := range result.Data {
+			if !activeIds[rec.Name] {
+				recordsToDelete = append(recordsToDelete, map[string]string{
+					"_id":  rec.ID,
+					"Name": rec.Name,
+				})
+			}
+		}
+
+		// If fewer than the page size was returned, we've reached the end
+		if len(result.Data) < 999 {
+			break
+		}
+		page++
+	}
+
+	return recordsToDelete, nil
 }
 
 func main() {
@@ -299,12 +437,12 @@ func main() {
 		log.Fatal("API_KEY_URL environment variable is not set")
 	}
 
-	accessKeyId := os.Getenv("X_ACCESS_KEY_ID")
+	accessKeyId := os.Getenv("X_ACCESS_KEY_ID_VALUE")
 	if accessKeyId == "" {
 		log.Fatal("X_ACCESS_KEY_ID environment variable is not set")
 	}
 
-	accessKeySecret := os.Getenv("X_ACCESS_KEY_SECRET")
+	accessKeySecret := os.Getenv("X_ACCESS_KEY_SECRET_VALUE")
 	if accessKeySecret == "" {
 		log.Fatal("X_ACCESS_KEY_SECRET environment variable is not set")
 	}
@@ -312,6 +450,13 @@ func main() {
 	fmt.Println("DEBUG API_KEY_URL:", apiKeyUrl)
 	start := time.Now()
 	ctx := context.Background()
+
+	// Build CardNo lookup before further processing
+	var err error
+	cardNoMap, err = loadCardNoMap("P1 User July.csv")
+	if err != nil {
+		fmt.Println("WARNING: could not build CardNo lookup:", err)
+	}
 
 	// Load service account
 	b, err := os.ReadFile("api.json")
@@ -337,12 +482,6 @@ func main() {
 		log.Fatalf("Unable to fetch students: %v", err)
 	}
 
-	// Delete all User_Master records before sending new ones
-	err = common.DeleteAllUserMaster(accessKeyId, accessKeySecret, "Students")
-	if err != nil {
-		log.Fatalf("Failed to delete all User_Master records: %v", err)
-	}
-
 	// Prepare payloads for User_Master batch
 	var payloads []map[string]interface{}
 	for _, s := range students {
@@ -354,6 +493,16 @@ func main() {
 		payloads = append(payloads, mapStudentToUserMasterPayload(s, photo))
 	}
 
+	// delete inactive students from User_Master
+	recordsToDelete, err := getInactiveStudents(accessKeyId, accessKeySecret)
+	if err != nil {
+		log.Fatalf("Failed to get inactive students: %v", err)
+	}
+	err = common.DeleteAllUserMaster(accessKeyId, accessKeySecret, recordsToDelete)
+	if err != nil {
+		log.Fatalf("Failed to delete inactive students: %v", err)
+	}
+
 	// Send to User_Master/batch endpoint
 	err = common.SendToUserMasterBatch(payloads, accessKeyId, accessKeySecret)
 	if err != nil {
@@ -361,7 +510,7 @@ func main() {
 	}
 
 	// Prepare data for sheets
-	headers := []interface{}{"schoolId", "Name", "type", "jobTitle", "department", "IdentityNo", "DateOfBirth", "IdentityType", "Status", "Gender", "FormGroup", "YearGroup", "photo", "photo_original_size", "photo_compressed_size", "photo_status"}
+	headers := []interface{}{"schoolId", "Name", "type", "jobTitle", "department", "IdentityNo", "DateOfBirth", "IdentityType", "Status", "Gender", "FormGroup", "YearGroup", "CardNo", "photo", "photo_original_size", "photo_compressed_size", "photo_status"}
 	values := [][]interface{}{headers}
 
 	for _, s := range students {
